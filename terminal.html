@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Web Terminal</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0d1117;
+            overflow: hidden;
+        }
+        #terminal-container {
+            width: 100vw;
+            height: 100vh;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal-container"></div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        function getUsername() {
+            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                const user = tg.initDataUnsafe.user;
+                const rawName = user.first_name || user.username || 'user';
+                return rawName.toLowerCase().replace(/\s+/g, '_');
+            }
+            return 'user';
+        }
+
+        const currentUser = getUsername();
+        let ghToken = localStorage.getItem('gh_token') || null;
+
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#0d1117',
+                foreground: '#c9d1d9',
+                cursor: '#58a6ff'
+            },
+            fontSize: 14,
+            fontFamily: 'monospace'
+        });
+
+        term.open(document.getElementById('terminal-container'));
+
+        term.writeln('\x1b[1;32mWeyrox Terminal v1.1.0 (GitHub Entegreli)\x1b[0m');
+        term.writeln('Komutlar için \x1b[1;33mhelp\x1b[0m, GitHub kullanımı için \x1b[1;33mgh help\x1b[0m yazın.\r\n');
+
+        let currentLine = '';
+        const prompt = () => term.write(`\r\n\x1b[1;34m${currentUser}@telegram\x1b[0m:\x1b[1;35m~\x1b[0m$ `);
+        prompt();
+
+        term.onData(e => {
+            switch (e) {
+                case '\r':
+                    term.writeln('');
+                    handleCommand(currentLine.trim());
+                    currentLine = '';
+                    break;
+                case '\u007F':
+                    if (currentLine.length > 0) {
+                        currentLine = currentLine.substr(0, currentLine.length - 1);
+                        term.write('\b \b');
+                    }
+                    break;
+                default:
+                    currentLine += e;
+                    term.write(e);
+            }
+        });
+
+        async function handleCommand(cmd) {
+            if (!cmd) {
+                prompt();
+                return;
+            }
+
+            const args = cmd.split(' ');
+            const command = args[0].toLowerCase();
+
+            switch (command) {
+                case 'help':
+                    term.writeln('Kullanılabilir komutlar:');
+                    term.writeln('  \x1b[36mgh [komut]\x1b[0m - GitHub işlemlerini çalıştırır');
+                    term.writeln('  \x1b[36mclear\x1b[0m      - Ekranı temizler');
+                    term.writeln('  \x1b[36mexit\x1b[0m       - Terminali kapatır');
+                    break;
+
+                case 'gh':
+                    await handleGitHubCommand(args.slice(1));
+                    break;
+
+                case 'clear':
+                    term.clear();
+                    break;
+
+                case 'exit':
+                    tg.close();
+                    return;
+
+                default:
+                    term.writeln(`Komut bulunamadı: ${command}`);
+            }
+            prompt();
+        }
+
+        async function handleGitHubCommand(args) {
+            const subCmd = args[0] ? args[0].toLowerCase() : 'help';
+
+            if (subCmd === 'help') {
+                term.writeln('GitHub Komutları:');
+                term.writeln('  \x1b[33mgh auth [token]\x1b[0m      - Personal Access Token kaydeder');
+                term.writeln('  \x1b[33mgh user [kullanici]\x1b[0m  - Kullanıcı profil detaylarını getirir');
+                term.writeln('  \x1b[33mgh repos [kullanici]\x1b[0m - Kullanıcının repolarını listeler');
+                term.writeln('  \x1b[33mgh repo [user/repo]\x1b[0m  - Belirtilen reponun ayrıntılarını gösterir');
+                return;
+            }
+
+            if (subCmd === 'auth') {
+                if (!args[1]) {
+                    term.writeln('Kullanım: gh auth ghp_xxxx... (Token belirtin)');
+                    return;
+                }
+                ghToken = args[1];
+                localStorage.setItem('gh_token', ghToken);
+                term.writeln('\x1b[32mGitHub Token başarıyla kaydedildi!\x1b[0m');
+                return;
+            }
+
+            const headers = { 'Accept': 'application/vnd.github.v3+json' };
+            if (ghToken) headers['Authorization'] = `token ${ghToken}`;
+
+            try {
+                if (subCmd === 'user') {
+                    const targetUser = args[1] || 'octocat';
+                    const res = await fetch(`https://api.github.com/users/${targetUser}`, { headers });
+                    const data = await res.json();
+
+                    if (res.ok) {
+                        term.writeln(`Kullanıcı: ${data.login} (${data.name || 'Ad belirtilmemiş'})`);
+                        term.writeln(`Public Repo Sayısı: ${data.public_repos}`);
+                        term.writeln(`Takipçi Sayısı: ${data.followers}`);
+                        term.writeln(`Bio: ${data.bio || 'Yok'}`);
+                    } else {
+                        term.writeln(`Hata: ${data.message}`);
+                    }
+                } 
+                else if (subCmd === 'repos') {
+                    const targetUser = args[1] || 'octocat';
+                    const res = await fetch(`https://api.github.com/users/${targetUser}/repos?sort=updated`, { headers });
+                    const repos = await res.json();
+
+                    if (res.ok && Array.isArray(repos)) {
+                        term.writeln(`\x1b[1m${targetUser}\x1b[0m kullanıcısının son güncellenen repoları:\n`);
+                        repos.slice(0, 10).forEach(repo => {
+                            term.writeln(`  \x1b[36m${repo.name}\x1b[0m - ⭐ ${repo.stargazers_count} | 🍴 ${repo.forks_count}`);
+                            if (repo.description) term.writeln(`    \x1b[90m${repo.description}\x1b[0m`);
+                        });
+                    } else {
+                        term.writeln(`Hata: ${repos.message || 'Repo bulunamadı'}`);
+                    }
+                }
+                else if (subCmd === 'repo') {
+                    if (!args[1] || !args[1].includes('/')) {
+                        term.writeln('Kullanım: gh repo kullanici_adi/repo_adi');
+                        return;
+                    }
+                    const res = await fetch(`https://api.github.com/repos/${args[1]}`, { headers });
+                    const data = await res.json();
+
+                    if (res.ok) {
+                        term.writeln(`Repo: \x1b[1m${data.full_name}\x1b[0m`);
+                        term.writeln(`Açıklama: ${data.description || 'Yok'}`);
+                        term.writeln(`Varsayılan Dal: ${data.default_branch}`);
+                        term.writeln(`Açık Issue Sayısı: ${data.open_issues_count}`);
+                        term.writeln(`URL: ${data.html_url}`);
+                    } else {
+                        term.writeln(`Hata: ${data.message}`);
+                    }
+                }
+                else {
+                    term.writeln(`Bilinmeyen GitHub komutu: ${subCmd}`);
+                }
+            } catch (err) {
+                term.writeln(`İstek hatası: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>
